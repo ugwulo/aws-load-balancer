@@ -1,0 +1,123 @@
+---
+# N.B: I used AWS CLI and Vault, so I didn't need to explicitely define the access key ID and token for my IAM user role
+# usage >> "AWS_PROFILE=profile-name ansible-playbook vpc-playbook.yml"
+- hosts: localhost
+  tasks:
+    - name: create altschool vpc.
+      amazon.aws.ec2_vpc_net:
+        name: Altschool VPC
+        cidr_block: 10.0.0.0/16
+        region: us-east-1
+        tags:
+          module: ec2_vpc_net
+          this: altschool_vpc
+      register: vpc_id
+
+# public subnet 1
+    - name: create Public 1A subnet
+      amazon.aws.ec2_vpc_subnet:
+        state: present
+        cidr: 10.0.1.0/24
+        region: us-east-1
+        az: us-east-1a
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        tags:
+          Name: Public 1A
+      register: public_1a
+
+# public subnet 2
+    - name: create Public 1B subnet
+      amazon.aws.ec2_vpc_subnet:
+        state: present
+        cidr: 10.0.2.0/24
+        region: us-east-1
+        az: us-east-1b
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        tags:
+          Name: Public 1B
+      register: public_1b
+
+# private subnet 1
+    - name: create Private 1A subnet
+      amazon.aws.ec2_vpc_subnet:
+        state: present
+        cidr: 10.0.3.0/24
+        region: us-east-1
+        az: us-east-1a
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        tags:
+          Name: Private 1A
+      register: private_1a
+
+# private subnet 2
+    - name: create Private 1B subnet
+      amazon.aws.ec2_vpc_subnet:
+        state: present
+        cidr: 10.0.4.0/24
+        region: us-east-1
+        az: us-east-1b
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        tags:
+          Name: Private 1B
+      register: private_1b
+
+# create internet gateway
+    - name: create internet gateway
+      amazon.aws.ec2_vpc_igw:
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        region: us-east-1
+        state: present
+        tags:
+          Name: Altschool igw
+      register: igw_id
+
+# create public route table
+    - name: create public subnet route table
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        region: us-east-1
+        tags:
+          Name: Public Web
+        subnets:
+          - "{{ public_1a.subnet.id }}"
+          - "{{ public_1b.subnet.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw_id.gateway_id }}"
+      register: public_route_table
+
+# create private route table
+# TODO - update this private route IP range
+    - name: create private subnet route table
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        region: us-east-1
+        tags:
+          Name: Private Web
+        subnets:
+          - "{{ private_1a.subnet.id }}"
+          - "{{ private_1b.subnet.id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw_id.gateway_id }}"
+      register: private_route_table
+
+# create security group to allow htttp & ssh traffic
+# TODO modify this rule later to restrict public access
+    - name: create security group
+      amazon.aws.ec2_security_group:
+        name: altschool-sg
+        description: allow all traffic on ports 80 & 22
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        region: us-east-1
+        tags:
+          Name: Altschool sg
+        rules:
+          - proto: tcp
+            ports:
+            - 80
+          - proto: tcp
+            ports:
+            - 22
+            cidr_ip: 0.0.0.0/0
+            rule_desc: allow all traffic on port 80 & 22
