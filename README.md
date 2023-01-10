@@ -1,3 +1,5 @@
+[live load balanced url](http://ugwulo.me/)
+
 <h1><p align="center">
 Background
 </p></h1>
@@ -21,9 +23,12 @@ You must submit a custom domain name(from a domain provider e.g. Route53) or the
 Design Infrastructure
 </p></h1>
 
+NB: I used Ansible to automate the whole process and then used bash script to setup my Nginx server from aws userdata config file
 ## Create VPC
 Name: altschool-vpc
 IPv4 CIDR Block: 10.0.0.0/16
+
+![Altchool VPC](screenshots/vpc-dashboard.png)
 
 ## Create Subnets
 Name: Public-1A
@@ -42,15 +47,17 @@ Name: Private-1B
 Availability Zone: us-east-1b
 IPv4 CIDR Block: 10.0.4.0/24
 
-## Create private route table
+![Subnets](screenshots/subnet-dashboard.png)
 
+## Create private route table
 Name: Private-RT
 VPC: altschool-vpc
 Subnet associations: Private-1A, Private-1B
+![Altchool route Table](screenshots/route-tables.png)
 
 ## Create Internet Gateway
-Name: johnpaul-IGW
-VPC: johnpaul-vpc
+Name: altschool-igw
+VPC: altschool-vpc
 
 ## Create NAT Gateway
 Name: altschool-NAT
@@ -61,4 +68,9 @@ Name: Public-Web
 Description: Public Web Access 
 [attach to VPC]
 
+## Create the 2 private instances
+## Create Target group
 ## Setup Autoscaling
+
+## Run the playbook
+![Playbook](screenshots/successful-plays1.png)

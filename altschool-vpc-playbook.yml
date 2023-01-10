@@ -1,7 +1,8 @@
 ---
 # N.B: I used AWS CLI and Vault, so I didn't need to explicitely define the access key ID and token for my IAM user role
-# usage >> "AWS_PROFILE=profile-name ansible-playbook vpc-playbook.yml"
+# usage >> "AWS_PROFILE=profile-name ansible-playbook altschool-vpc-playbook.yml"
 - hosts: localhost
+  gather_facts: no
   tasks:
     - name: create altschool vpc.
       amazon.aws.ec2_vpc_net:
@@ -13,7 +14,7 @@
           this: altschool_vpc
       register: vpc_id
 
-# public subnet 1
+# public subnet 1 to host the load balancer
     - name: create Public 1A subnet
       amazon.aws.ec2_vpc_subnet:
         state: present
@@ -37,7 +38,7 @@
           Name: Public 1B
       register: public_1b
 
-# private subnet 1
+# private subnet 1 to host the first server
     - name: create Private 1A subnet
       amazon.aws.ec2_vpc_subnet:
         state: present
@@ -49,7 +50,7 @@
           Name: Private 1A
       register: private_1a
 
-# private subnet 2
+# private subnet 2 to host the second server
     - name: create Private 1B subnet
       amazon.aws.ec2_vpc_subnet:
         state: present
@@ -61,18 +62,30 @@
           Name: Private 1B
       register: private_1b
 
-# create internet gateway
+# create internet gateway for the public subnets
     - name: create internet gateway
       amazon.aws.ec2_vpc_igw:
         vpc_id: "{{ vpc_id.vpc.id }}"
-        region: us-east-1
         state: present
         tags:
           Name: Altschool igw
       register: igw_id
 
-# create public route table
-    - name: create public subnet route table
+# create a NAT gateway for the private subnets
+    - name: Create new nat gateway
+      amazon.aws.ec2_vpc_nat_gateway:
+        state: present 
+        subnet_id: "{{ public_1a.subnet.id }}"
+        if_exist_do_not_create: yes
+        release_eip: true
+        wait: true
+        region: us-east-1
+      register: natgw_id
+
+
+# create internet gateway route table and associate the public subnets using
+# make main route table
+    - name: create internet gateway route table
       amazon.aws.ec2_vpc_route_table:
         vpc_id: "{{ vpc_id.vpc.id }}"
         region: us-east-1
@@ -86,9 +99,8 @@
             gateway_id: "{{ igw_id.gateway_id }}"
       register: public_route_table
 
-# create private route table
-# TODO - update this private route IP range
-    - name: create private subnet route table
+# create NAT gateway route table and associate the private subnets
+    - name: create NAT gateway route table
       amazon.aws.ec2_vpc_route_table:
         vpc_id: "{{ vpc_id.vpc.id }}"
         region: us-east-1
@@ -99,15 +111,60 @@
           - "{{ private_1b.subnet.id }}"
         routes:
           - dest: 0.0.0.0/0
-            gateway_id: "{{ igw_id.gateway_id }}"
+            gateway_id: "{{ natgw_id.nat_gateway_id }}"
       register: private_route_table
 
-# create security group to allow htttp & ssh traffic
-# TODO modify this rule later to restrict public access
-    - name: create security group
+# create ALB security group
+    - name: create ALB security group
       amazon.aws.ec2_security_group:
-        name: altschool-sg
-        description: allow all traffic on ports 80 & 22
+        name: alb-sg
+        description: allow internet access to ALB
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        region: us-east-1
+        tags:
+          Name: Altschool alb sg
+        rules:
+          - proto: tcp
+            ports:
+            - 80
+            cidr_ip: 0.0.0.0/0
+            rule_desc: allow internet access from anywhere
+      register: alb_sg
+
+# Create a target group
+# ensure to setup ansible community module for this
+    - name: Create a target group with a default health check
+      community.aws.elb_target_group:
+        name: altschool-tg
+        protocol: http
+        port: 80
+        vpc_id: "{{ vpc_id.vpc.id }}"
+        state: present
+
+# setup application load balancer (ALB)
+    - name: setup load balancer
+      amazon.aws.elb_application_lb:
+        name: altschool-alb
+        subnets:
+          - "{{ public_1a.subnet.id }}"
+          - "{{ public_1b.subnet.id }}"
+        security_groups:
+          - "{{ alb_sg.group_id }}"
+        region: us-east-1
+        listeners:
+          - Protocol: HTTP
+            Port: 80
+            DefaultActions:
+              - Type: forward
+                TargetGroupName: altschool-tg
+        state: present
+      register: altschool_lb
+
+# create security group to allow ALB traffic to the private ec2 instances
+    - name: create private ec2 instance security group
+      amazon.aws.ec2_security_group:
+        name: altschool-ec2-sg
+        description: allow internet-facing ALB access
         vpc_id: "{{ vpc_id.vpc.id }}"
         region: us-east-1
         tags:
@@ -115,9 +172,75 @@
         rules:
           - proto: tcp
             ports:
-            - 80
+            - 22
+            # replace IP with local machine IP
+            cidr_ip: 197.210.85.8/32
+            rule_desc: allow ssh traffic from local machine
           - proto: tcp
             ports:
-            - 22
-            cidr_ip: 0.0.0.0/0
-            rule_desc: allow all traffic on port 80 & 22
+            - 80
+            group_id: "{{ alb_sg.group_id }}"
+            rule_desc: allow traffic form ALB security group
+      register: ec2_sg
+        
+
+# Export an ec2 key pair before creating an instance or just indicate the name if created already
+    - name: import ec2 key pair
+      amazon.aws.ec2_key:
+        name: ec2-user
+        # change the path accordingly
+        key_material: "{{ lookup('file', '/home/ugwulo/.ssh/id_rsa.pub') }}"
+      tags:
+        - ec2_create
+        - ec2_keypair
+
+# Create first ec2 instance in the private subnet1
+    - name: create server1 ec2 instance with user data
+      amazon.aws.ec2_instance:
+        name: server1
+        region: us-east-1
+        key_name: ec2-user
+        instance_type: t2.micro
+        security_group: "{{ ec2_sg.group_id }}"
+        vpc_subnet_id: "{{ private_1a.subnet.id }}"
+        network:
+          assign_public_ip: false
+          delete_on_termination: true
+        image_id: ami-0b5eea76982371e91
+        user_data: "{{ lookup('file', 'user_data.sh') }}"
+      tags:
+        - ec2_create
+      register: server1
+
+# Create second ec2 instance in the private subnet2
+    - name: create server2 ec2 instance with user data
+      amazon.aws.ec2_instance:
+        name: server2
+        region: us-east-1
+        key_name: ec2-user
+        instance_type: t2.micro
+        security_group: "{{ ec2_sg.group_id }}"
+        vpc_subnet_id: "{{ private_1b.subnet.id }}"
+        network:
+          assign_public_ip: false
+          delete_on_termination: true
+        image_id: ami-0b5eea76982371e91
+        user_data: "{{ lookup('file', 'user_data.sh') }}"
+      tags:
+        - ec2_create
+      register: server2
+
+# attach the ec2 instances to the target group
+# I could not get this to work due to time, but I had to manually do attach the ec2 instances to make it work
+# I will figure it out later as this is failing
+    - name: Register server1 instance target to a target group
+      community.aws.elb_target:
+        target_group_name: altschool-tg
+        target_id: ec2.instances[0].id
+        state: present
+
+    - name: Register server2 instance target to a target group
+      community.aws.elb_target:
+        target_group_name: altschool-tg
+        target_id: ec2.instances[1].id
+        state: present
