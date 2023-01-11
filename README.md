@@ -74,3 +74,11 @@ Description: Public Web Access
 
 ## Run the playbook
 ![Playbook](screenshots/successful-plays1.png)
+![Playbook](screenshots/successful-plays2.png)
+
+## Private ec2 Instances
+![Server1](screenshots/server1-dashboard.png)
+![Server2](screenshots/server2-dashboard.png)
+
+## Load Balancer Dashboard
+![Server2](screenshots/loadbalancer-dashboard.png)
