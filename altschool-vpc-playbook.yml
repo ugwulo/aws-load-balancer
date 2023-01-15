@@ -231,16 +231,10 @@
       register: server2
 
 # attach the ec2 instances to the target group
-# I could not get this to work due to time, but I had to manually do attach the ec2 instances to make it work
-# I will figure it out later as this is failing
-    - name: Register server1 instance target to a target group
+    - name: Register targets
       community.aws.elb_target:
         target_group_name: altschool-tg
-        target_id: ec2.instances[0].id
-        state: present
-
-    - name: Register server2 instance target to a target group
-      community.aws.elb_target:
-        target_group_name: altschool-tg
-        target_id: ec2.instances[1].id
+        target_id: 
+          - "{{ server1.instances[0].instance_id }}"
+          - "{{ server2.instances[0].instance_id }}"
         state: present
